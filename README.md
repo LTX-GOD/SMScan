@@ -106,6 +106,6 @@ SMScan/
 ## 致谢
 
 - [Phantom (无影)](https://github.com/Team-intN18-SoybeanSeclab/Phantom)
-- [XMCVE-WebRecon](https://github.com/user/XMCVE-WebRecon)
+- [XMCVE-WebRecon](https://github.com/duckpigdog/XMCVE-WebRecon)
 - [Nuclei](https://github.com/projectdiscovery/nuclei)
 - [Colly](https://github.com/gocolly/colly)
