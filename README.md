@@ -22,7 +22,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/xxx/SMScan.git
+git clone https://github.com/LTX-GOD/SMScan.git
 cd SMScan
 go build -o smscan ./cmd/smscan/
 ```
@@ -45,22 +45,22 @@ go build -o smscan ./cmd/smscan/
 
 ## 参数说明
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `-u, --url` | 目标 URL | - |
-| `-l, --list` | URL 列表文件 | - |
-| `-d, --depth` | 爬取深度 | 2 |
-| `-c, --concurrency` | 并发数 | 10 |
-| `-t, --timeout` | 超时 (秒) | 15 |
-| `--proxy` | 代理地址 | - |
-| `--ua` | 自定义 User-Agent | - |
-| `--fuzz` | 启用 Fuzz 扫描 | false |
-| `--fuzz-mode` | Fuzz 模式 (path/api/js/all) | default |
-| `-n, --nuclei` | 启用 Nuclei 扫描 | false |
-| `-o, --output` | 输出文件 (json/csv) | - |
-| `-s, --save` | 追加保存文件 | - |
-| `-q, --quiet` | 静默模式 | false |
-| `-v, --verbose` | 详细模式 | false |
+| 参数                | 说明                        | 默认值  |
+| ------------------- | --------------------------- | ------- |
+| `-u, --url`         | 目标 URL                    | -       |
+| `-l, --list`        | URL 列表文件                | -       |
+| `-d, --depth`       | 爬取深度                    | 2       |
+| `-c, --concurrency` | 并发数                      | 10      |
+| `-t, --timeout`     | 超时 (秒)                   | 15      |
+| `--proxy`           | 代理地址                    | -       |
+| `--ua`              | 自定义 User-Agent           | -       |
+| `--fuzz`            | 启用 Fuzz 扫描              | false   |
+| `--fuzz-mode`       | Fuzz 模式 (path/api/js/all) | default |
+| `-n, --nuclei`      | 启用 Nuclei 扫描            | false   |
+| `-o, --output`      | 输出文件 (json/csv)         | -       |
+| `-s, --save`        | 追加保存文件                | -       |
+| `-q, --quiet`       | 静默模式                    | false   |
+| `-v, --verbose`     | 详细模式                    | false   |
 
 ## 输出示例
 
