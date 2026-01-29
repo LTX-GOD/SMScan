@@ -1,0 +1,216 @@
+# SMScan JS 字典 - 常见敏感 JS 文件
+# 配置文件
+config.js
+app.config.js
+settings.js
+setting.js
+configure.js
+configs.js
+conf.js
+env.js
+environment.js
+global.js
+global_config.js
+globalConfig.js
+constants.js
+const.js
+
+# API 定义
+api.js
+appapi.js
+app_api.js
+http.js
+http_json.js
+ajax.js
+Ajax.js
+request.js
+fetch.js
+axios.js
+
+# 用户相关
+user.js
+users.js
+login.js
+auth.js
+session.js
+token.js
+admin.js
+member.js
+account.js
+profile.js
+userinfo.js
+user_info.js
+UserInformation.js
+
+# 核心业务
+main.js
+index.js
+app.js
+core.js
+common.js
+base.js
+utils.js
+util.js
+Util.js
+helper.js
+Helper.js
+function.js
+
+# 路由
+router.js
+route.js
+routes.js
+router.config.js
+
+# 数据/存储
+data.js
+datas.js
+store.js
+storage.js
+localStorage.js
+localstorage.js
+cache.js
+Cache.js
+
+# 上传相关
+upload.js
+uploader.js
+ajaxfileupload.js
+FileUploadField.js
+zyupload.js
+
+# 编辑器
+editor.js
+Editor.js
+edit.js
+form.js
+forms.js
+formeditor.js
+
+# 验证
+validator.js
+FormValidator.js
+validate.js
+validation.js
+mt_validation.js
+
+# 安全相关
+security.js
+crypto.js
+encrypt.js
+decrypt.js
+md5.js
+sign.js
+
+# 支付
+pay.js
+payment.js
+checkout.js
+order.js
+
+# WebSocket
+socket.js
+websocket.js
+ws.js
+
+# 调试
+debug.js
+log.js
+logger.js
+console.js
+test.js
+demo.js
+dev.js
+development.js
+
+# 打包产物
+vendor.js
+bundle.js
+chunk.js
+runtime.js
+manifest.js
+build.js
+dist.js
+min.js
+main.min.js
+app.min.js
+
+# 第三方集成
+share.js
+cookie.js
+js.cookie.js
+analytics.js
+ga.js
+track.js
+
+# 业务模块
+list.js
+detail.js
+details.js
+item.js
+Item.js
+page.js
+home.js
+menu.js
+header.js
+footer.js
+sidebar.js
+nav.js
+navbar.js
+
+# 组件
+popup.js
+modal.js
+dialog.js
+tooltip.js
+Tooltip.js
+message.js
+notification.js
+alert.js
+confirm.js
+loading.js
+progress.js
+slider.js
+carousel.js
+table.js
+grid.js
+tree.js
+select.js
+input.js
+button.js
+form.comment.js
+
+# 图表
+chart.js
+charts.js
+echarts.js
+graph.js
+stats.js
+Stats.js
+overview.js
+Overview.js
+
+# 文件操作
+file.js
+FileLoader.js
+Loader.js
+download.js
+export.js
+import.js
+
+# 其他
+theme.js
+lang.js
+language.js
+i18n.js
+locale.js
+zh-cn.js
+en.js
+process.js
+action.js
+control.js
+Manager.js
+Command.js
+Record.js
+custom.js
+plugin.js

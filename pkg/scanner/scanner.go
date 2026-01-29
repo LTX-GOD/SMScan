@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,12 +28,22 @@ type Scanner struct {
 	extractor       *extractor.Extractor
 	fpMatcher       *fingerprint.Matcher
 	hpDetector      *honeypot.Detector
+	techDetector    *extractor.TechDetector
+	secAnalyzer     *extractor.SecurityAnalyzer
 	Results         []*models.ScanResult
 	resultsMutex    sync.Mutex
 	MaxDepth        int
 	Concurrency     int
+	Timeout         int
+	UserAgent       string
+	Proxy           string
 	Collector       *colly.Collector
-	visitedPatterns sync.Map // pattern -> *int32
+	visitedPatterns sync.Map
+	scannedCount    int32
+	totalCount      int32
+	errorCount      int32
+	OnProgress      func(scanned, total int, currentURL string)
+	startTime       time.Time
 }
 
 func NewScanner(fpConfigPath string, maxDepth int, concurrency int) (*Scanner, error) {
@@ -42,93 +53,138 @@ func NewScanner(fpConfigPath string, maxDepth int, concurrency int) (*Scanner, e
 	}
 
 	return &Scanner{
-		extractor:   extractor.NewExtractor(),
-		fpMatcher:   fpMatcher,
-		hpDetector:  honeypot.NewDetector(),
-		MaxDepth:    maxDepth,
-		Concurrency: concurrency,
-		Results:     make([]*models.ScanResult, 0),
+		extractor:    extractor.NewExtractor(),
+		fpMatcher:    fpMatcher,
+		hpDetector:   honeypot.NewDetector(),
+		techDetector: extractor.NewTechDetector(),
+		secAnalyzer:  extractor.NewSecurityAnalyzer(),
+		MaxDepth:     maxDepth,
+		Concurrency:  concurrency,
+		Timeout:      15,
+		UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		Results:      make([]*models.ScanResult, 0),
 	}, nil
 }
 
+// SetProxy 设置代理
+func (s *Scanner) SetProxy(proxy string) {
+	s.Proxy = proxy
+}
+
+// SetUserAgent 设置 User-Agent
+func (s *Scanner) SetUserAgent(ua string) {
+	s.UserAgent = ua
+}
+
+// SetTimeout 设置超时
+func (s *Scanner) SetTimeout(timeout int) {
+	s.Timeout = timeout
+}
+
+// GetStats 获取扫描统计
+func (s *Scanner) GetStats() models.ScanStats {
+	stats := models.ScanStats{
+		TotalURLs:   int(atomic.LoadInt32(&s.totalCount)),
+		ScannedURLs: int(atomic.LoadInt32(&s.scannedCount)),
+		Errors:      int(atomic.LoadInt32(&s.errorCount)),
+	}
+
+	// 统计指纹和敏感信息
+	for _, r := range s.Results {
+		stats.Fingerprints += len(r.Fingerprints)
+		stats.SensitiveData += len(r.Assets.Keys) + len(r.Assets.Sensitive) + len(r.Assets.JWTs)
+		stats.Vulnerabilities += len(r.NucleiFindings)
+	}
+
+	if !s.startTime.IsZero() {
+		stats.Duration = time.Since(s.startTime).Round(time.Second).String()
+		stats.StartTime = s.startTime.Format("2006-01-02 15:04:05")
+	}
+
+	return stats
+}
+
 func (s *Scanner) Scan(startURL string) {
+	s.startTime = time.Now()
+
+	// 创建 Transport
+	transport := &http.Transport{
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		ResponseHeaderTimeout: time.Duration(s.Timeout) * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        s.Concurrency * 2,
+		MaxIdleConnsPerHost: s.Concurrency,
+		IdleConnTimeout:     30 * time.Second,
+	}
+
+	// 设置代理
+	if s.Proxy != "" {
+		proxyURL, err := url.Parse(s.Proxy)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+
 	c := colly.NewCollector(
 		colly.MaxDepth(s.MaxDepth),
-		colly.Async(true), // 开启异步
-		// 忽略 robots.txt
+		colly.Async(true),
 		colly.IgnoreRobotsTxt(),
 	)
 
-	// 配置 TLS
-	c.WithTransport(&http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		DialContext: (&http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}).DialContext,
-		ResponseHeaderTimeout: 10 * time.Second, // 设置响应超时
-	})
-	
-	// 设置全局请求超时
-	c.SetRequestTimeout(15 * time.Second)
+	c.WithTransport(transport)
+	c.SetRequestTimeout(time.Duration(s.Timeout) * time.Second)
 
-	// 设置并发限制
 	c.Limit(&colly.LimitRule{
 		DomainGlob:  "*",
 		Parallelism: s.Concurrency,
-		RandomDelay: 200 * time.Millisecond,
+		RandomDelay: 100 * time.Millisecond,
 	})
 
-	// 调试日志 (可选)
-	// c.SetDebugger(&debug.LogDebugger{})
-
-	// 请求回调
 	c.OnRequest(func(r *colly.Request) {
-		// 再次检查 URL，防止漏网之鱼
 		if !s.shouldVisit(r.URL.String()) {
 			r.Abort()
 			return
 		}
-		
-		r.Headers.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36")
-		fmt.Printf("[*] Scanning: %s\n", r.URL.String())
+
+		r.Headers.Set("User-Agent", s.UserAgent)
+		r.Headers.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+		r.Headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+
+		atomic.AddInt32(&s.totalCount, 1)
+
+		if s.OnProgress != nil {
+			s.OnProgress(int(atomic.LoadInt32(&s.scannedCount)), int(atomic.LoadInt32(&s.totalCount)), r.URL.String())
+		}
 	})
 
-	// 响应回调
 	c.OnResponse(func(r *colly.Response) {
-		// 限制响应大小，防止下载过大的文件 (例如 > 5MB)
 		if len(r.Body) > 5*1024*1024 {
 			return
 		}
 		s.processResponse(r)
+		atomic.AddInt32(&s.scannedCount, 1)
 	})
 
-	// 错误回调
 	c.OnError(func(r *colly.Response, err error) {
-		// 忽略一些常见的非关键错误，避免刷屏
+		atomic.AddInt32(&s.errorCount, 1)
 		if strings.Contains(err.Error(), "unsupported protocol scheme") {
 			return
 		}
-		fmt.Printf("[-] Error fetching %s: %v\n", r.Request.URL, err)
 	})
 
-	// 链接提取与深挖
-	// colly 自动处理 HTML 中的 href，这里我们需要处理更多类型的链接（如 API）
-	// 并手动将其加入队列
-	c.OnHTML("a[href], script[src], link[href], img[src]", func(e *colly.HTMLElement) {
+	c.OnHTML("a[href], script[src], link[href], img[src], iframe[src], form[action]", func(e *colly.HTMLElement) {
 		link := e.Attr("href")
 		if link == "" {
 			link = e.Attr("src")
 		}
-		if link != "" {
-			// 只有同域或子域才继续爬取
-			// colly 默认 Visit 会处理去重和深度
-			// 这里简单判断一下是否应该继续爬取
-			// 注意：colly 的 Visit 是针对页面的，对于 JS/CSS 等资源，我们可能只想分析不想“爬取”
-			// 但为了简单，我们让 colly 决定，或者在这里做过滤
-			// 为了深挖 API，我们需要解析 JS 文件，所以 JS 文件也应该 Visit
-			if s.shouldVisit(link) {
-				e.Request.Visit(link)
-			}
+		if link == "" {
+			link = e.Attr("action")
+		}
+		if link != "" && s.shouldVisit(link) {
+			e.Request.Visit(link)
 		}
 	})
 
@@ -137,47 +193,45 @@ func (s *Scanner) Scan(startURL string) {
 }
 
 func (s *Scanner) processResponse(r *colly.Response) {
+	startTime := time.Now()
 	bodyStr := string(r.Body)
 	targetURL := r.Request.URL.String()
 
 	// 1. 提取资产
 	assets := s.extractor.Extract(bodyStr, targetURL)
 
-	// 2. 指纹识别
+	// 2. 提取 Vue 信息
+	vueInfo := s.extractor.ExtractVue(bodyStr)
+
+	// 3. 指纹识别
 	headers := make(map[string]string)
-	// colly 2.x r.Headers is *http.Header which is map[string][]string
 	if r.Headers != nil {
 		for k, v := range *r.Headers {
 			headers[k] = strings.Join(v, ", ")
 		}
 	}
-	
-	// 尝试获取 Title 和 Favicon
+
+	// 提取 Title 和 Favicon
 	title := ""
 	faviconHash := ""
 	var doc *goquery.Document
-	
-	// 只对 HTML 内容进行 DOM 解析
+
 	contentType := r.Headers.Get("Content-Type")
 	if strings.Contains(contentType, "text/html") {
 		doc, _ = goquery.NewDocumentFromReader(strings.NewReader(bodyStr))
 		if doc != nil {
 			title = doc.Find("title").Text()
 
-			// 提取 Favicon
 			iconURL := ""
-			doc.Find("link[rel*='icon']").Each(func(i int, s *goquery.Selection) {
+			doc.Find("link[rel*='icon']").Each(func(i int, sel *goquery.Selection) {
 				if iconURL == "" {
-					href, exists := s.Attr("href")
+					href, exists := sel.Attr("href")
 					if exists {
 						iconURL = href
 					}
 				}
 			})
-			
-			// 如果没找到显式的 link icon，尝试默认的 favicon.ico
-			// 注意：如果页面不是根目录，favicon 通常在根目录
-			// 但这里我们尝试相对于当前 URL
+
 			if iconURL == "" {
 				iconURL = "/favicon.ico"
 			}
@@ -194,10 +248,30 @@ func (s *Scanner) processResponse(r *colly.Response) {
 
 	fingerprints := s.fpMatcher.Match(headers, bodyStr, title, faviconHash)
 
-	// 3. 蜜罐检测
+	// 4. 蜜罐检测
 	honeypotInfo := s.hpDetector.Detect(headers, bodyStr, nil)
 
-	// 4. 保存结果
+	// 5. 技术栈检测
+	techStack := s.techDetector.Detect(headers, bodyStr)
+
+	// 6. 安全头分析
+	responseInfo := s.secAnalyzer.AnalyzeResponse(headers, nil)
+	responseInfo.ContentType = contentType
+	responseInfo.ContentLength = int64(len(r.Body))
+
+	// 解析 Cookies
+	if setCookie := r.Headers.Get("Set-Cookie"); setCookie != "" {
+		cookies := parseCookies(setCookie)
+		responseInfo.Cookies = cookies
+	}
+
+	// 7. 计算风险评分
+	riskLevel, riskScore := calculateRisk(assets, honeypotInfo, responseInfo.SecurityHeaders)
+
+	// 计算响应时间
+	responseTime := time.Since(startTime).Milliseconds()
+
+	// 8. 保存结果
 	result := &models.ScanResult{
 		URL:          targetURL,
 		Status:       r.StatusCode,
@@ -206,24 +280,29 @@ func (s *Scanner) processResponse(r *colly.Response) {
 		Fingerprints: fingerprints,
 		Assets:       assets,
 		Honeypot:     honeypotInfo,
+		Vue:          vueInfo,
+		TechStack:    techStack,
+		ResponseInfo: responseInfo,
+		RiskLevel:    riskLevel,
+		RiskScore:    riskScore,
+		ScanTime:     time.Now().Format("2006-01-02 15:04:05"),
+		ResponseTime: responseTime,
 	}
 
 	s.resultsMutex.Lock()
 	s.Results = append(s.Results, result)
 	s.resultsMutex.Unlock()
-	
-	// 手动将提取到的 API 路径加入深挖队列 (如果是绝对路径且看起来像 URL)
-	// Colly 的 Visit 会自动处理相对路径，但对于正则提取到的 API，我们需要手动处理
-	// 只有在深度允许的情况下才继续
+
+	// 深挖 API
 	if r.Request.Depth < s.MaxDepth {
 		baseURL := r.Request.URL
-		
-		// 限制每个页面提取并访问的 API 数量，防止队列爆炸
 		maxApisToVisit := 50
 		visitedCount := 0
 
 		for _, api := range assets.AbsoluteApis {
-			if visitedCount >= maxApisToVisit { break }
+			if visitedCount >= maxApisToVisit {
+				break
+			}
 			absURL := resolveURL(baseURL, api)
 			if absURL != "" && s.shouldVisit(absURL) {
 				r.Request.Visit(absURL)
@@ -231,7 +310,9 @@ func (s *Scanner) processResponse(r *colly.Response) {
 			}
 		}
 		for _, api := range assets.RelativeApis {
-			if visitedCount >= maxApisToVisit { break }
+			if visitedCount >= maxApisToVisit {
+				break
+			}
 			absURL := resolveURL(baseURL, api)
 			if absURL != "" && s.shouldVisit(absURL) {
 				r.Request.Visit(absURL)
@@ -239,9 +320,10 @@ func (s *Scanner) processResponse(r *colly.Response) {
 			}
 		}
 
-		// Webpack Chunks (通常也是相对路径)
 		for _, chunk := range assets.WebpackChunks {
-			if visitedCount >= maxApisToVisit { break }
+			if visitedCount >= maxApisToVisit {
+				break
+			}
 			absURL := resolveURL(baseURL, chunk)
 			if absURL != "" && s.shouldVisit(absURL) {
 				r.Request.Visit(absURL)
@@ -261,41 +343,38 @@ func resolveURL(base *url.URL, ref string) string {
 
 func (s *Scanner) shouldVisit(link string) bool {
 	link = strings.ToLower(link)
-	
-	// 过滤非 HTTP 协议
-	if strings.HasPrefix(link, "mailto:") || 
-	   strings.HasPrefix(link, "tel:") || 
-	   strings.HasPrefix(link, "javascript:") || 
-	   strings.HasPrefix(link, "data:") ||
-	   strings.HasPrefix(link, "#") {
+
+	if strings.HasPrefix(link, "mailto:") ||
+		strings.HasPrefix(link, "tel:") ||
+		strings.HasPrefix(link, "javascript:") ||
+		strings.HasPrefix(link, "data:") ||
+		strings.HasPrefix(link, "#") {
 		return false
 	}
 
-	// 过滤注销链接
 	if strings.Contains(link, "logout") || strings.Contains(link, "signout") {
 		return false
 	}
-	
-	// 过滤第三方统计/广告
-	if strings.Contains(link, "google-analytics.com") || 
-	   strings.Contains(link, "googletagmanager.com") ||
-	   strings.Contains(link, "hm.baidu.com") ||
-	   strings.Contains(link, "cnzz.com") {
-		return false
+
+	thirdParty := []string{
+		"google-analytics.com", "googletagmanager.com", "hm.baidu.com",
+		"cnzz.com", "51.la", "doubleclick.net", "facebook.com",
+		"twitter.com", "linkedin.com", "youtube.com",
+	}
+	for _, domain := range thirdParty {
+		if strings.Contains(link, domain) {
+			return false
+		}
 	}
 
-	// 不爬取图片等二进制文件，除非为了元数据（这里为了效率跳过）
 	if isBinary(link) {
 		return false
 	}
-	
-	// 基于 URL 模式的去重/限流
-	// 如果同一模式的 URL 访问次数超过阈值，则不再访问
-	// 例如: /category.php?id=1, /category.php?id=2 ...
+
 	pattern := utils.GetURLPattern(link)
 	val, _ := s.visitedPatterns.LoadOrStore(pattern, new(int32))
 	count := atomic.AddInt32(val.(*int32), 1)
-	if count > 10 { // 每个模式最多访问 10 次
+	if count > 10 {
 		return false
 	}
 
@@ -303,59 +382,51 @@ func (s *Scanner) shouldVisit(link string) bool {
 }
 
 func isBinary(path string) bool {
-	// 增加 css 作为"二进制"对待，意味着不深入爬取其内部链接（如背景图），但 processResponse 仍会处理它（进行指纹识别）
-	// 用户反馈 css 扫描卡顿，可能是因为 css 文件很大，或者 colly 试图解析其中的链接
-	// 我们可以在 OnHTML 中不监听 css 内容，或者在这里就过滤掉
-	// 但如果指纹识别需要 css 内容（如 finger.json 中的 keyword），则必须下载
-	// 所以这里不仅是是否爬取，而是是否"访问"
-	// 考虑到效率，一般不递归爬取 css/js 内的链接（js 除外，因为要提取 API）
-	// 这里 isBinary 主要用于 shouldVisit，控制的是 Visit 行为
-	
 	exts := []string{
 		".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".bmp", ".webp",
 		".woff", ".woff2", ".ttf", ".eot", ".otf",
-		".mp3", ".mp4", ".avi", ".mov", ".wav",
+		".mp3", ".mp4", ".avi", ".mov", ".wav", ".webm", ".flv",
 		".zip", ".tar", ".gz", ".rar", ".7z", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
 		".iso", ".bin", ".exe", ".dll", ".so", ".dmg", ".apk",
 	}
-	// 注意：不建议过滤 .js，因为我们需要从中提取 API
-	// .css 可以根据情况过滤，但如果指纹依赖 css，则不能过滤
-	// 针对用户卡顿问题，主要是网络请求问题，通过超时和大小限制解决
-	
-	// 移除 query 参数进行判断
+
 	if idx := strings.Index(path, "?"); idx != -1 {
 		path = path[:idx]
 	}
-	
+
 	for _, ext := range exts {
-		if strings.HasSuffix(path, ext) {
+		if strings.HasSuffix(strings.ToLower(path), ext) {
 			return true
 		}
 	}
 	return false
 }
 
-// fetchResource 简单的同步资源获取
-func (s *Scanner) fetchResource(url string) ([]byte, error) {
+func (s *Scanner) fetchResource(resourceURL string) ([]byte, error) {
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 		Timeout: 5 * time.Second,
 	}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest("GET", resourceURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", s.UserAgent)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
 	return io.ReadAll(resp.Body)
 }
 
-// calculateFaviconHash 计算 Favicon 的 MurmurHash3
-// 算法参考 Shodan/Fofa: mmh3(base64_with_newlines(content))
 func calculateFaviconHash(content []byte) string {
 	b64 := base64.StdEncoding.EncodeToString(content)
-	
+
 	var buffer bytes.Buffer
 	for i, r := range b64 {
 		buffer.WriteRune(r)
@@ -364,8 +435,104 @@ func calculateFaviconHash(content []byte) string {
 		}
 	}
 	buffer.WriteRune('\n')
-	
+
 	h32 := murmur3.New32()
 	h32.Write(buffer.Bytes())
 	return fmt.Sprintf("%d", int32(h32.Sum32()))
+}
+
+func parseCookies(setCookie string) []*models.Cookie {
+	var cookies []*models.Cookie
+
+	parts := strings.Split(setCookie, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		attrs := strings.Split(part, ";")
+		if len(attrs) == 0 {
+			continue
+		}
+
+		// 第一个是 name=value
+		nameValue := strings.SplitN(attrs[0], "=", 2)
+		if len(nameValue) != 2 {
+			continue
+		}
+
+		cookie := &models.Cookie{
+			Name:  strings.TrimSpace(nameValue[0]),
+			Value: strings.TrimSpace(nameValue[1]),
+		}
+
+		for _, attr := range attrs[1:] {
+			attr = strings.TrimSpace(attr)
+			attrLower := strings.ToLower(attr)
+
+			if attrLower == "secure" {
+				cookie.Secure = true
+			} else if attrLower == "httponly" {
+				cookie.HttpOnly = true
+			} else if strings.HasPrefix(attrLower, "samesite=") {
+				cookie.SameSite = strings.TrimPrefix(attr, "SameSite=")
+			} else if strings.HasPrefix(attrLower, "path=") {
+				cookie.Path = strings.TrimPrefix(attr, "Path=")
+			} else if strings.HasPrefix(attrLower, "domain=") {
+				cookie.Domain = strings.TrimPrefix(attr, "Domain=")
+			}
+		}
+
+		cookies = append(cookies, cookie)
+	}
+
+	return cookies
+}
+
+func calculateRisk(assets models.AssetResult, hp models.HoneypotInfo, sh *models.SecurityHeaders) (string, int) {
+	score := 0
+
+	// 敏感信息权重
+	score += len(assets.Keys) * 15
+	score += len(assets.Sensitive) * 10
+	score += len(assets.JWTs) * 20
+	score += len(assets.PrivateKeys) * 50
+	score += len(assets.AWSKeys) * 40
+	score += len(assets.GithubTokens) * 30
+	score += len(assets.DatabaseConns) * 35
+	score += len(assets.HardcodedCreds) * 25
+	score += len(assets.IDCards) * 20
+	score += len(assets.BankCards) * 25
+	score += len(assets.InternalIPs) * 5
+
+	// 安全头缺失
+	if sh != nil {
+		score += (100 - sh.Score) / 5
+	}
+
+	// 蜜罐警告
+	if hp.IsHoneypot {
+		score -= 50 // 降低风险分，因为可能是蜜罐
+	}
+
+	if score > 100 {
+		score = 100
+	}
+
+	var level string
+	switch {
+	case score >= 80:
+		level = "critical"
+	case score >= 60:
+		level = "high"
+	case score >= 30:
+		level = "medium"
+	case score > 0:
+		level = "low"
+	default:
+		level = "info"
+	}
+
+	return level, score
 }
