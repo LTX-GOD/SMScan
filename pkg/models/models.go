@@ -41,6 +41,42 @@ type AssetResult struct {
 	InternalIPs   []string `json:"internal_ips,omitempty"`    // 内网 IP
 	Comments      []string `json:"comments,omitempty"`        // 代码注释
 	HardcodedCreds []string `json:"hardcoded_creds,omitempty"` // 硬编码凭证
+
+	// 更多 Token 类型
+	GoogleAPIKeys  []string `json:"google_api_keys,omitempty"`  // Google API Key
+	SlackTokens    []string `json:"slack_tokens,omitempty"`     // Slack Token
+	StripeKeys     []string `json:"stripe_keys,omitempty"`      // Stripe Key
+	GitLabTokens   []string `json:"gitlab_tokens,omitempty"`    // GitLab Token
+	HerokuKeys     []string `json:"heroku_keys,omitempty"`      // Heroku API Key
+	MailgunKeys    []string `json:"mailgun_keys,omitempty"`     // Mailgun Key
+	TwilioKeys     []string `json:"twilio_keys,omitempty"`      // Twilio Key
+
+	// 编码字符串
+	EncodedStrings []EncodedString `json:"encoded_strings,omitempty"` // Base64/Hex 编码的敏感数据
+
+	// 表单信息
+	Forms []FormInfo `json:"forms,omitempty"` // HTML 表单
+}
+
+// EncodedString 编码字符串检测结果
+type EncodedString struct {
+	Encoded  string `json:"encoded"`
+	Decoded  string `json:"decoded"`
+	Encoding string `json:"encoding"` // base64, hex
+}
+
+// FormInfo HTML 表单信息
+type FormInfo struct {
+	Action string      `json:"action"`
+	Method string      `json:"method"`
+	Fields []FormField `json:"fields"`
+}
+
+// FormField 表单字段
+type FormField struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value,omitempty"`
 }
 
 // VueInfo Vue 框架信息

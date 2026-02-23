@@ -1,6 +1,8 @@
 package extractor
 
 import (
+	base64pkg "encoding/base64"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -33,6 +35,18 @@ type Extractor struct {
 	internalIPRegex   *regexp.Regexp        // 内网 IP
 	commentRegex      *regexp.Regexp        // 注释
 	hardcodedCredRegex *regexp2.Regexp      // 硬编码凭证
+
+	// 更多 Token 类型
+	googleAPIKeyRegex *regexp.Regexp       // Google API Key
+	slackTokenRegex   *regexp.Regexp       // Slack Token
+	stripeKeyRegex    *regexp.Regexp       // Stripe Key
+	gitlabTokenRegex  *regexp.Regexp       // GitLab Token
+	herokuKeyRegex    *regexp.Regexp       // Heroku API Key
+	mailgunKeyRegex   *regexp.Regexp       // Mailgun Key
+	twilioKeyRegex    *regexp.Regexp       // Twilio Key
+
+	// 编码检测
+	base64Regex *regexp.Regexp            // Base64 编码字符串
 
 	// 高级提取器
 	webpackExtractor   *WebpackExtractor
@@ -68,6 +82,18 @@ func NewExtractor() *Extractor {
 		internalIPRegex:  regexp.MustCompile(`\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3})\b`),
 		commentRegex:     regexp.MustCompile(`(?://|#|/\*|\*)\s*(TODO|FIXME|HACK|XXX|BUG|NOTE|WARNING|DEBUG|TEMP|PASSWORD|SECRET|KEY|TOKEN|CREDENTIAL|ADMIN|ROOT|BACKDOOR)[:\s]+[^\n\r*/]{5,100}`),
 		hardcodedCredRegex: regexp2.MustCompile(`(?i)(?:admin|root|test|demo|guest|default)[_-]?(?:password|passwd|pwd|pass)\s*[:=]\s*["']?([^\s"']{4,32})["']?`, 0),
+
+		// 更多 Token 类型
+		googleAPIKeyRegex: regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`),
+		slackTokenRegex:   regexp.MustCompile(`xox[baprs]-[0-9a-zA-Z-]{10,}`),
+		stripeKeyRegex:    regexp.MustCompile(`(?:sk|pk)_(?:live|test)_[0-9a-zA-Z]{20,}`),
+		gitlabTokenRegex:  regexp.MustCompile(`glpat-[0-9A-Za-z_-]{20,}`),
+		herokuKeyRegex:    regexp.MustCompile(`(?i)heroku[_-]?(?:api[_-]?)?key\s*[:=]\s*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']?`),
+		mailgunKeyRegex:   regexp.MustCompile(`key-[0-9a-zA-Z]{32}`),
+		twilioKeyRegex:    regexp.MustCompile(`SK[0-9a-fA-F]{32}`),
+
+		// 编码检测 - 匹配赋值上下文中的 Base64 长字符串
+		base64Regex: regexp.MustCompile(`["']([A-Za-z0-9+/]{40,}={0,2})["']`),
 
 		// 高级提取器
 		webpackExtractor:   NewWebpackExtractor(),
@@ -127,6 +153,18 @@ func (e *Extractor) Extract(body string, baseURL string) models.AssetResult {
 	result.InternalIPs = unique(e.internalIPRegex.FindAllString(body, limit))
 	result.Comments = unique(e.commentRegex.FindAllString(body, limit))
 	result.HardcodedCreds = e.extractRegexp2Matches(e.hardcodedCredRegex, body, limit, 0)
+
+	// 更多 Token 类型
+	result.GoogleAPIKeys = unique(e.googleAPIKeyRegex.FindAllString(body, limit))
+	result.SlackTokens = unique(e.slackTokenRegex.FindAllString(body, limit))
+	result.StripeKeys = unique(e.stripeKeyRegex.FindAllString(body, limit))
+	result.GitLabTokens = unique(e.gitlabTokenRegex.FindAllString(body, limit))
+	result.HerokuKeys = unique(extractSubmatch(e.herokuKeyRegex, body, limit))
+	result.MailgunKeys = unique(e.mailgunKeyRegex.FindAllString(body, limit))
+	result.TwilioKeys = unique(e.twilioKeyRegex.FindAllString(body, limit))
+
+	// 编码字符串检测 (Base64 解码后含敏感关键词)
+	result.EncodedStrings = e.detectEncodedStrings(body)
 
 	// Webpack Chunks
 	result.WebpackChunks = e.webpackExtractor.ExtractChunks(body)
@@ -213,6 +251,130 @@ func unique(slice []string) []string {
 		}
 	}
 	return list
+}
+
+// extractSubmatch 辅助函数：提取正则子匹配
+func extractSubmatch(re *regexp.Regexp, body string, limit int) []string {
+	matches := re.FindAllStringSubmatch(body, limit)
+	var results []string
+	for _, m := range matches {
+		if len(m) > 1 && m[1] != "" {
+			results = append(results, m[1])
+		}
+	}
+	return results
+}
+
+// detectEncodedStrings 检测 Base64 编码的敏感字符串
+func (e *Extractor) detectEncodedStrings(body string) []models.EncodedString {
+	var results []models.EncodedString
+	matches := e.base64Regex.FindAllStringSubmatch(body, 50)
+
+	sensitiveKeywords := []string{"password", "passwd", "secret", "token", "key", "auth", "credential", "private", "admin", "root", "mysql", "postgres", "redis"}
+
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		encoded := m[1]
+		decoded, err := base64Decode(encoded)
+		if err != nil || len(decoded) < 6 {
+			continue
+		}
+		lower := strings.ToLower(decoded)
+		for _, kw := range sensitiveKeywords {
+			if strings.Contains(lower, kw) {
+				results = append(results, models.EncodedString{
+					Encoded:  truncateStr(encoded, 80),
+					Decoded:  truncateStr(decoded, 120),
+					Encoding: "base64",
+				})
+				break
+			}
+		}
+		if len(results) >= 20 {
+			break
+		}
+	}
+	return results
+}
+
+func base64Decode(s string) (string, error) {
+	// 标准 Base64
+	if data, err := base64StdDecode(s); err == nil {
+		return string(data), nil
+	}
+	// URL-safe Base64
+	if data, err := base64URLDecode(s); err == nil {
+		return string(data), nil
+	}
+	return "", fmt.Errorf("decode failed")
+}
+
+func base64StdDecode(s string) ([]byte, error) {
+	return base64pkg.StdEncoding.DecodeString(s)
+}
+
+func base64URLDecode(s string) ([]byte, error) {
+	return base64pkg.URLEncoding.DecodeString(s)
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// ExtractForms 提取 HTML 表单信息
+func (e *Extractor) ExtractForms(body string) []models.FormInfo {
+	var forms []models.FormInfo
+	formRegex := regexp.MustCompile(`(?is)<form([^>]*)>(.*?)</form>`)
+	inputRegex := regexp.MustCompile(`(?i)<(?:input|select|textarea)([^>]*)>`)
+	attrRegex := regexp.MustCompile(`(?i)(\w+)\s*=\s*["']([^"']*)["']`)
+
+	formMatches := formRegex.FindAllStringSubmatch(body, 20)
+	for _, fm := range formMatches {
+		if len(fm) < 3 {
+			continue
+		}
+		attrs := parseAttrs(attrRegex, fm[1])
+		form := models.FormInfo{
+			Action: attrs["action"],
+			Method: strings.ToUpper(attrs["method"]),
+		}
+		if form.Method == "" {
+			form.Method = "GET"
+		}
+
+		inputMatches := inputRegex.FindAllStringSubmatch(fm[2], 50)
+		for _, im := range inputMatches {
+			if len(im) < 2 {
+				continue
+			}
+			ia := parseAttrs(attrRegex, im[1])
+			if ia["name"] == "" {
+				continue
+			}
+			form.Fields = append(form.Fields, models.FormField{
+				Name:  ia["name"],
+				Type:  ia["type"],
+				Value: ia["value"],
+			})
+		}
+		forms = append(forms, form)
+	}
+	return forms
+}
+
+func parseAttrs(re *regexp.Regexp, s string) map[string]string {
+	attrs := make(map[string]string)
+	for _, m := range re.FindAllStringSubmatch(s, -1) {
+		if len(m) > 2 {
+			attrs[strings.ToLower(m[1])] = m[2]
+		}
+	}
+	return attrs
 }
 
 func isStaticFile(path string) bool {

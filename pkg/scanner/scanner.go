@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -175,21 +176,106 @@ func (s *Scanner) Scan(startURL string) {
 		}
 	})
 
-	c.OnHTML("a[href], script[src], link[href], img[src], iframe[src], form[action]", func(e *colly.HTMLElement) {
-		link := e.Attr("href")
-		if link == "" {
-			link = e.Attr("src")
-		}
-		if link == "" {
-			link = e.Attr("action")
-		}
-		if link != "" && s.shouldVisit(link) {
-			e.Request.Visit(link)
-		}
-	})
+	// Depth 1: 不跟踪链接，只扫描目标 URL
+	// Depth 2+: 正常跟踪页面中的链接
+	if s.MaxDepth >= 2 {
+		c.OnHTML("a[href], script[src], link[href], img[src], iframe[src], form[action]", func(e *colly.HTMLElement) {
+			link := e.Attr("href")
+			if link == "" {
+				link = e.Attr("src")
+			}
+			if link == "" {
+				link = e.Attr("action")
+			}
+			if link != "" && s.shouldVisit(link) {
+				e.Request.Visit(link)
+			}
+		})
+	}
 
 	c.Visit(startURL)
+
+	// Depth 3: 额外探测 robots.txt、sitemap.xml 和常见敏感路径
+	if s.MaxDepth >= 3 {
+		s.deepDiscovery(c, startURL)
+	}
+
 	c.Wait()
+}
+
+// deepDiscovery Depth 3 额外探测：robots.txt、sitemap.xml、常见敏感路径
+func (s *Scanner) deepDiscovery(c *colly.Collector, startURL string) {
+	baseURL, err := url.Parse(startURL)
+	if err != nil {
+		return
+	}
+	base := fmt.Sprintf("%s://%s", baseURL.Scheme, baseURL.Host)
+
+	// 1. 探测 robots.txt 并提取路径
+	robotsBody, err := s.fetchResource(base + "/robots.txt")
+	if err == nil && len(robotsBody) > 0 && len(robotsBody) < 1024*1024 {
+		for _, line := range strings.Split(string(robotsBody), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Disallow:") || strings.HasPrefix(line, "Allow:") {
+				path := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+				if path != "" && path != "/" && !strings.Contains(path, "*") {
+					c.Visit(base + path)
+				}
+			}
+			if strings.HasPrefix(line, "Sitemap:") {
+				sitemapURL := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+				if sitemapURL != "" {
+					s.parseSitemap(c, sitemapURL, base)
+				}
+			}
+		}
+	}
+
+	// 2. 探测 sitemap.xml
+	s.parseSitemap(c, base+"/sitemap.xml", base)
+
+	// 3. 常见敏感路径探测
+	sensitivePaths := []string{
+		"/.env", "/.git/config", "/.git/HEAD",
+		"/swagger.json", "/swagger-ui.html", "/api-docs", "/openapi.json",
+		"/actuator", "/actuator/env", "/actuator/health",
+		"/server-status", "/server-info",
+		"/.DS_Store", "/crossdomain.xml",
+		"/.well-known/security.txt",
+		"/wp-login.php", "/wp-json/wp/v2/users",
+		"/admin/", "/debug/", "/console/",
+		"/phpinfo.php", "/info.php",
+		"/graphql", "/graphiql",
+		"/config.js", "/config.json", "/app.config.js",
+		"/package.json", "/composer.json",
+		"/backup.sql", "/dump.sql", "/db.sql",
+		"/WEB-INF/web.xml",
+	}
+	for _, path := range sensitivePaths {
+		c.Visit(base + path)
+	}
+}
+
+// parseSitemap 解析 sitemap.xml 提取 URL
+func (s *Scanner) parseSitemap(c *colly.Collector, sitemapURL string, base string) {
+	body, err := s.fetchResource(sitemapURL)
+	if err != nil || len(body) == 0 {
+		return
+	}
+	content := string(body)
+	// 简单提取 <loc>...</loc> 中的 URL
+	locRegex := regexp.MustCompile(`<loc>\s*(.*?)\s*</loc>`)
+	matches := locRegex.FindAllStringSubmatch(content, 200)
+	for _, m := range matches {
+		if len(m) > 1 {
+			u := strings.TrimSpace(m[1])
+			if strings.HasPrefix(u, "http") {
+				c.Visit(u)
+			} else if strings.HasPrefix(u, "/") {
+				c.Visit(base + u)
+			}
+		}
+	}
 }
 
 func (s *Scanner) processResponse(r *colly.Response) {
@@ -200,8 +286,11 @@ func (s *Scanner) processResponse(r *colly.Response) {
 	// 1. 提取资产
 	assets := s.extractor.Extract(bodyStr, targetURL)
 
-	// 2. 提取 Vue 信息
-	vueInfo := s.extractor.ExtractVue(bodyStr)
+	// 2. 提取 Vue 信息 (Depth 1 跳过，减少开销)
+	var vueInfo *models.VueInfo
+	if s.MaxDepth >= 2 {
+		vueInfo = s.extractor.ExtractVue(bodyStr)
+	}
 
 	// 3. 指纹识别
 	headers := make(map[string]string)
@@ -211,39 +300,55 @@ func (s *Scanner) processResponse(r *colly.Response) {
 		}
 	}
 
-	// 提取 Title 和 Favicon
 	title := ""
 	faviconHash := ""
-	var doc *goquery.Document
 
 	contentType := r.Headers.Get("Content-Type")
 	if strings.Contains(contentType, "text/html") {
-		doc, _ = goquery.NewDocumentFromReader(strings.NewReader(bodyStr))
+		doc, _ := goquery.NewDocumentFromReader(strings.NewReader(bodyStr))
 		if doc != nil {
 			title = doc.Find("title").Text()
 
-			iconURL := ""
-			doc.Find("link[rel*='icon']").Each(func(i int, sel *goquery.Selection) {
+			// Depth 1: 跳过 favicon 获取，节省一次 HTTP 请求
+			if s.MaxDepth >= 2 {
+				iconURL := ""
+				doc.Find("link[rel*='icon']").Each(func(i int, sel *goquery.Selection) {
+					if iconURL == "" {
+						href, exists := sel.Attr("href")
+						if exists {
+							iconURL = href
+						}
+					}
+				})
 				if iconURL == "" {
-					href, exists := sel.Attr("href")
-					if exists {
-						iconURL = href
+					iconURL = "/favicon.ico"
+				}
+				absIconURL := resolveURL(r.Request.URL, iconURL)
+				if absIconURL != "" {
+					content, err := s.fetchResource(absIconURL)
+					if err == nil && len(content) > 0 {
+						faviconHash = calculateFaviconHash(content)
 					}
 				}
-			})
-
-			if iconURL == "" {
-				iconURL = "/favicon.ico"
 			}
 
-			absIconURL := resolveURL(r.Request.URL, iconURL)
-			if absIconURL != "" {
-				content, err := s.fetchResource(absIconURL)
-				if err == nil && len(content) > 0 {
-					faviconHash = calculateFaviconHash(content)
-				}
+			// Depth 3: 主动提取页面中所有 JS 文件 URL 并访问分析
+			if s.MaxDepth >= 3 {
+				doc.Find("script[src]").Each(func(i int, sel *goquery.Selection) {
+					if src, exists := sel.Attr("src"); exists {
+						absURL := resolveURL(r.Request.URL, src)
+						if absURL != "" {
+							r.Request.Visit(absURL)
+						}
+					}
+				})
 			}
 		}
+	}
+
+	// 表单提取
+	if strings.Contains(contentType, "text/html") {
+		assets.Forms = s.extractor.ExtractForms(bodyStr)
 	}
 
 	fingerprints := s.fpMatcher.Match(headers, bodyStr, title, faviconHash)
@@ -259,16 +364,13 @@ func (s *Scanner) processResponse(r *colly.Response) {
 	responseInfo.ContentType = contentType
 	responseInfo.ContentLength = int64(len(r.Body))
 
-	// 解析 Cookies
 	if setCookie := r.Headers.Get("Set-Cookie"); setCookie != "" {
-		cookies := parseCookies(setCookie)
-		responseInfo.Cookies = cookies
+		responseInfo.Cookies = parseCookies(setCookie)
 	}
 
 	// 7. 计算风险评分
 	riskLevel, riskScore := calculateRisk(assets, honeypotInfo, responseInfo.SecurityHeaders)
 
-	// 计算响应时间
 	responseTime := time.Since(startTime).Milliseconds()
 
 	// 8. 保存结果
@@ -293,10 +395,19 @@ func (s *Scanner) processResponse(r *colly.Response) {
 	s.Results = append(s.Results, result)
 	s.resultsMutex.Unlock()
 
-	// 深挖 API
+	// Depth 1: 不跟踪发现的 API/Chunks，只做单页分析
+	if s.MaxDepth <= 1 {
+		return
+	}
+
+	// Depth 2+: 跟踪发现的 API 和 Webpack Chunks
 	if r.Request.Depth < s.MaxDepth {
 		baseURL := r.Request.URL
+		// Depth 3: 更高的跟踪限制
 		maxApisToVisit := 50
+		if s.MaxDepth >= 3 {
+			maxApisToVisit = 200
+		}
 		visitedCount := 0
 
 		for _, api := range assets.AbsoluteApis {
@@ -319,7 +430,6 @@ func (s *Scanner) processResponse(r *colly.Response) {
 				visitedCount++
 			}
 		}
-
 		for _, chunk := range assets.WebpackChunks {
 			if visitedCount >= maxApisToVisit {
 				break
@@ -329,6 +439,60 @@ func (s *Scanner) processResponse(r *colly.Response) {
 				r.Request.Visit(absURL)
 				visitedCount++
 			}
+		}
+
+		// Depth 3: 主动获取并分析 SourceMap 文件
+		if s.MaxDepth >= 3 {
+			for _, sm := range assets.SourceMaps {
+				absURL := resolveURL(baseURL, sm)
+				if absURL != "" {
+					s.analyzeSourceMap(absURL, r)
+				}
+			}
+		}
+	}
+}
+
+// analyzeSourceMap 获取 SourceMap 文件并提取源文件路径信息
+func (s *Scanner) analyzeSourceMap(mapURL string, r *colly.Response) {
+	body, err := s.fetchResource(mapURL)
+	if err != nil || len(body) == 0 {
+		return
+	}
+
+	// 提取 sources 字段中的文件路径
+	sourcesRegex := regexp.MustCompile(`"sources"\s*:\s*\[([^\]]+)\]`)
+	if m := sourcesRegex.FindSubmatch(body); len(m) > 1 {
+		fileRegex := regexp.MustCompile(`"([^"]+)"`)
+		files := fileRegex.FindAllSubmatch(m[1], 500)
+		var paths []string
+		for _, f := range files {
+			if len(f) > 1 {
+				path := string(f[1])
+				// 过滤 webpack 内部路径，保留有意义的源文件路径
+				if !strings.HasPrefix(path, "webpack://") &&
+					!strings.HasPrefix(path, "node_modules/") &&
+					!strings.Contains(path, "?") {
+					paths = append(paths, path)
+				}
+			}
+		}
+
+		if len(paths) > 0 {
+			smResult := &models.ScanResult{
+				URL:    mapURL,
+				Status: 200,
+				Title:  fmt.Sprintf("SourceMap (%d files)", len(paths)),
+				Assets: models.AssetResult{
+					SourceMaps: paths,
+				},
+				RiskLevel: "medium",
+				RiskScore: 30,
+				ScanTime:  time.Now().Format("2006-01-02 15:04:05"),
+			}
+			s.resultsMutex.Lock()
+			s.Results = append(s.Results, smResult)
+			s.resultsMutex.Unlock()
 		}
 	}
 }
@@ -374,7 +538,15 @@ func (s *Scanner) shouldVisit(link string) bool {
 	pattern := utils.GetURLPattern(link)
 	val, _ := s.visitedPatterns.LoadOrStore(pattern, new(int32))
 	count := atomic.AddInt32(val.(*int32), 1)
-	if count > 10 {
+
+	// 根据深度调整同模式 URL 的访问上限
+	var patternLimit int32 = 10
+	if s.MaxDepth <= 1 {
+		patternLimit = 3 // Depth 1: 快速侦察，严格去重
+	} else if s.MaxDepth >= 3 {
+		patternLimit = 30 // Depth 3: 深度扫描，放宽限制
+	}
+	if count > patternLimit {
 		return false
 	}
 
