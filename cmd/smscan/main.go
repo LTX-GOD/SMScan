@@ -300,7 +300,7 @@ func printResults(s *scanner.Scanner) {
 	var order []string
 
 	for _, r := range s.Results {
-		pattern := truncateURL(r.URL, 50)
+		pattern := r.URL
 		key := fmt.Sprintf("%s|%d", pattern, r.Status)
 
 		if _, exists := aggMap[key]; !exists {
@@ -321,7 +321,7 @@ func printResults(s *scanner.Scanner) {
 	table.SetHeader([]string{"URL", "状态", "标题", "指纹/技术栈", "风险", "资产"})
 	table.SetAutoWrapText(true)
 	table.SetRowLine(true)
-	table.SetColWidth(35)
+	table.SetColWidth(80)
 	table.SetHeaderColor(
 		tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
 		tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
@@ -351,8 +351,8 @@ func printResults(s *scanner.Scanner) {
 
 		// 标题
 		title := r.Title
-		if len(title) > 30 {
-			title = title[:27] + "..."
+		if len(title) > 60 {
+			title = title[:57] + "..."
 		}
 
 		table.Append([]string{
@@ -509,32 +509,32 @@ func printSensitiveDetails(s *scanner.Scanner) {
 
 	for _, r := range s.Results {
 		for _, v := range r.Assets.Keys {
-			if !seen[v] { seen[v] = true; allKeys = append(allKeys, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+			if !seen[v] { seen[v] = true; allKeys = append(allKeys, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.Sensitive {
-			if !seen[v] { seen[v] = true; allSensitive = append(allSensitive, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+			if !seen[v] { seen[v] = true; allSensitive = append(allSensitive, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.JWTs {
-			if !seen[v] { seen[v] = true; allJWTs = append(allJWTs, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), truncate(v, 60))) }
+			if !seen[v] { seen[v] = true; allJWTs = append(allJWTs, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.HardcodedCreds {
-			if !seen[v] { seen[v] = true; allCreds = append(allCreds, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+			if !seen[v] { seen[v] = true; allCreds = append(allCreds, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.DatabaseConns {
-			if !seen[v] { seen[v] = true; allDBConns = append(allDBConns, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+			if !seen[v] { seen[v] = true; allDBConns = append(allDBConns, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.AWSKeys {
-			if !seen[v] { seen[v] = true; allAWS = append(allAWS, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+			if !seen[v] { seen[v] = true; allAWS = append(allAWS, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.GithubTokens {
-			if !seen[v] { seen[v] = true; allGithub = append(allGithub, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), truncate(v, 50))) }
+			if !seen[v] { seen[v] = true; allGithub = append(allGithub, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		for _, v := range r.Assets.PrivateKeys {
-			if !seen[v] { seen[v] = true; allPrivate = append(allPrivate, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+			if !seen[v] { seen[v] = true; allPrivate = append(allPrivate, fmt.Sprintf("[%s] %s", r.URL, v)) }
 		}
 		if verbose {
 			for _, v := range r.Assets.Comments {
-				if !seen[v] { seen[v] = true; allComments = append(allComments, fmt.Sprintf("[%s] %s", truncateURL(r.URL, 30), v)) }
+				if !seen[v] { seen[v] = true; allComments = append(allComments, fmt.Sprintf("[%s] %s", r.URL, v)) }
 			}
 		}
 	}
@@ -635,7 +635,7 @@ func printVueInfo(s *scanner.Scanner) {
 
 	for _, r := range vueResults {
 		green := color.New(color.FgGreen)
-		green.Printf("  [%s] Vue %s\n", truncateURL(r.URL, 40), r.Vue.Version)
+		green.Printf("  [%s] Vue %s\n", r.URL, r.Vue.Version)
 
 		if len(r.Vue.Routes) > 0 {
 			fmt.Printf("    路由 (%d):\n", len(r.Vue.Routes))
@@ -681,7 +681,7 @@ func printSecurityAssessment(s *scanner.Scanner) {
 			scoreColor = color.New(color.FgRed)
 		}
 
-		scoreColor.Printf("  [%s] 安全评分: %d/100\n", truncateURL(r.URL, 40), sh.Score)
+		scoreColor.Printf("  [%s] 安全评分: %d/100\n", r.URL, sh.Score)
 
 		if len(sh.Missing) > 0 {
 			fmt.Printf("    缺失: %s\n", color.YellowString(strings.Join(sh.Missing, ", ")))
