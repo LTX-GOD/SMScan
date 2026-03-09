@@ -5,6 +5,7 @@
 ## ✨ 核心特性
 
 ### 🔍 智能检测
+
 - **打包器识别**: 自动检测 Webpack、Vite、Next.js、Gatsby、Nuxt 等 10+ 种现代前端打包器
 - **Webpack 模块还原**: 智能还原异步加载的 JS chunk，发现隐藏代码
 - **指纹识别**: 1000+ 指纹规则 + FaviconHash
@@ -12,6 +13,7 @@
 - **Vue 框架分析**: 版本检测、路由提取、组件识别
 
 ### 🛡️ 敏感信息检测 (30+ 规则)
+
 - **云服务密钥**: AWS、阿里云 OSS、腾讯云 COS
 - **API Token**: GitHub、GitLab、Slack、Stripe、Google API、SendGrid 等
 - **凭证信息**: JWT Token、私钥、数据库连接串、硬编码密码
@@ -20,6 +22,7 @@
 - **编码检测**: Base64 编码的敏感数据
 
 ### 🚀 高级功能
+
 - **JS 深度爬取**: 递归下载所有 JS 文件（外链 + 内联），自动去重
 - **批量扫描**: 并发扫描多个目标，生成聚合报告
 - **上下文展示**: 每个匹配项显示行号和代码上下文
@@ -64,28 +67,28 @@ go build -o smscan ./cmd/smscan/
 
 ## 参数说明
 
-| 参数                | 说明                        | 默认值  |
-| ------------------- | --------------------------- | ------- |
-| `-u, --url`         | 目标 URL                    | -       |
-| `-l, --list`        | URL 列表文件                | -       |
-| `-d, --depth`       | 爬取深度                    | 2       |
-| `-c, --concurrency` | 并发数                      | 10      |
-| `-t, --timeout`     | 超时 (秒)                   | 15      |
-| `--proxy`           | 代理地址                    | -       |
-| `--ua`              | 自定义 User-Agent           | -       |
-| `--enable-packer`   | 启用打包器检测              | false   |
-| `--webpack-recovery`| 启用 Webpack 模块还原       | false   |
-| `--deep-crawl`      | 深度爬取 JS 文件            | false   |
-| `--advanced-scan`   | 高级敏感信息扫描（带上下文）| false   |
-| `--batch-mode`      | 批量扫描模式                | false   |
-| `--aggregate-report`| 生成聚合报告                | false   |
-| `--fuzz`            | 启用 Fuzz 扫描              | false   |
-| `--fuzz-mode`       | Fuzz 模式 (path/api/js/all) | default |
-| `-n, --nuclei`      | 启用 Nuclei 扫描            | false   |
-| `-o, --output`      | 输出文件 (json/html)        | -       |
-| `-s, --save`        | 追加保存文件                | -       |
-| `-q, --quiet`       | 静默模式                    | false   |
-| `-v, --verbose`     | 详细模式                    | false   |
+| 参数                 | 说明                         | 默认值  |
+| -------------------- | ---------------------------- | ------- |
+| `-u, --url`          | 目标 URL                     | -       |
+| `-l, --list`         | URL 列表文件                 | -       |
+| `-d, --depth`        | 爬取深度                     | 2       |
+| `-c, --concurrency`  | 并发数                       | 10      |
+| `-t, --timeout`      | 超时 (秒)                    | 15      |
+| `--proxy`            | 代理地址                     | -       |
+| `--ua`               | 自定义 User-Agent            | -       |
+| `--enable-packer`    | 启用打包器检测               | false   |
+| `--webpack-recovery` | 启用 Webpack 模块还原        | false   |
+| `--deep-crawl`       | 深度爬取 JS 文件             | false   |
+| `--advanced-scan`    | 高级敏感信息扫描（带上下文） | false   |
+| `--batch-mode`       | 批量扫描模式                 | false   |
+| `--aggregate-report` | 生成聚合报告                 | false   |
+| `--fuzz`             | 启用 Fuzz 扫描               | false   |
+| `--fuzz-mode`        | Fuzz 模式 (path/api/js/all)  | default |
+| `-n, --nuclei`       | 启用 Nuclei 扫描             | false   |
+| `-o, --output`       | 输出文件 (json/html)         | -       |
+| `-s, --save`         | 追加保存文件                 | -       |
+| `-q, --quiet`        | 静默模式                     | false   |
+| `-v, --verbose`      | 详细模式                     | false   |
 
 ## 输出示例
 
@@ -161,11 +164,13 @@ SMScan/
 ## 🚀 快速开始
 
 ### 基础扫描
+
 ```bash
 ./smscan -u https://example.com
 ```
 
 ### 完整扫描（推荐）
+
 ```bash
 ./smscan -u https://example.com \
   --enable-packer \
@@ -176,6 +181,7 @@ SMScan/
 ```
 
 ### 批量扫描
+
 ```bash
 # 创建目标列表
 cat > targets.txt << EOF
@@ -187,11 +193,6 @@ EOF
 # 批量扫描并生成聚合报告
 ./smscan -l targets.txt --batch-mode --aggregate-report -o aggregate.html
 ```
-
-## 📖 详细文档
-
-- [增强功能使用指南](ENHANCEMENT_GUIDE.md) - 新功能详细说明和代码示例
-- [改进总结](IMPROVEMENTS.md) - 完整的改进对比和集成建议
 
 ## 🎯 核心优势
 
