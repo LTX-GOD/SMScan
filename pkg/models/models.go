@@ -157,6 +157,7 @@ type ScanResult struct {
 	TechStack     *TechStack       `json:"tech_stack,omitempty"`
 	ResponseInfo  *ResponseInfo    `json:"response_info,omitempty"`
 	FuzzResults   []FuzzResult     `json:"fuzz_results,omitempty"`
+	PackerInfo    *PackerInfo      `json:"packer_info,omitempty"`
 	RiskLevel     string           `json:"risk_level,omitempty"` // low, medium, high, critical
 	RiskScore     int              `json:"risk_score,omitempty"` // 0-100
 	ScanTime      string           `json:"scan_time,omitempty"`
@@ -195,6 +196,13 @@ type FuzzResult struct {
 	Lines      int    `json:"lines,omitempty"`
 	Type       string `json:"type"` // path, api, js, param
 	Discovered bool   `json:"discovered"`
+}
+
+// PackerInfo 打包器信息
+type PackerInfo struct {
+	Detected bool     `json:"detected"`
+	Type     string   `json:"type,omitempty"`     // webpack, vite, rollup, parcel, etc.
+	Features []string `json:"features,omitempty"` // 检测到的特征
 }
 
 // Cookie 简单的 Cookie 结构

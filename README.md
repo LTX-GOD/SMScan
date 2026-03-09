@@ -26,7 +26,7 @@
 - **JS 深度爬取**: 递归下载所有 JS 文件（外链 + 内联），自动去重
 - **批量扫描**: 并发扫描多个目标，生成聚合报告
 - **上下文展示**: 每个匹配项显示行号和代码上下文
-- **交互式报告**: 可折叠、可搜索、按严重程度分类的 HTML 报告
+- **交互式报告**: 可折叠、可搜索、按严重程度分类的输出
 - **安全评估**: 响应头分析、CSP 解析、安全评分
 - **蜜罐检测**: 多特征识别
 - **Fuzz 扫描**: 内置 300+ 路径/API/JS 字典
@@ -62,7 +62,7 @@ go build -o smscan ./cmd/smscan/
 ./smscan -l urls.txt --batch-mode --aggregate-report
 
 # 完整扫描（所有功能）
-./smscan -u https://example.com -d 2 --enable-packer --webpack-recovery --advanced-scan --fuzz --nuclei -o report.html
+./smscan -u https://example.com -d 3 --enable-packer --webpack-recovery --advanced-scan --deep-crawl --fuzz --nuclei -o report.json
 ```
 
 ## 参数说明
@@ -74,6 +74,7 @@ go build -o smscan ./cmd/smscan/
 | `-d, --depth`        | 爬取深度                     | 2       |
 | `-c, --concurrency`  | 并发数                       | 10      |
 | `-t, --timeout`      | 超时 (秒)                    | 15      |
+| `-f, --fingerprint`  | 指纹配置文件路径             | config/finger.json |
 | `--proxy`            | 代理地址                     | -       |
 | `--ua`               | 自定义 User-Agent            | -       |
 | `--enable-packer`    | 启用打包器检测               | false   |
@@ -83,10 +84,10 @@ go build -o smscan ./cmd/smscan/
 | `--batch-mode`       | 批量扫描模式                 | false   |
 | `--aggregate-report` | 生成聚合报告                 | false   |
 | `--fuzz`             | 启用 Fuzz 扫描               | false   |
-| `--fuzz-mode`        | Fuzz 模式 (path/api/js/all)  | default |
+| `--fuzz-mode`        | Fuzz 模式 (path/api/js/all/default) | default |
 | `-n, --nuclei`       | 启用 Nuclei 扫描             | false   |
-| `-o, --output`       | 输出文件 (json/html)         | -       |
-| `-s, --save`         | 追加保存文件                 | -       |
+| `-o, --output`       | 输出文件 (json/csv) - 覆盖模式 | -     |
+| `-s, --save`         | 保存文件 (json/csv) - 追加模式 | -     |
 | `-q, --quiet`        | 静默模式                     | false   |
 | `-v, --verbose`      | 详细模式                     | false   |
 

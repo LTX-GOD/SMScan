@@ -20,21 +20,27 @@ import (
 )
 
 var (
-	targetURL    string
-	urlFile      string
-	maxDepth     int
-	concurrency  int
-	outputFile   string
-	saveFile     string
-	fpConfig     string
-	enableNuclei bool
-	enableFuzz   bool
-	fuzzMode     string
-	proxyURL     string
-	timeout      int
-	userAgent    string
-	quiet        bool
-	verbose      bool
+	targetURL        string
+	urlFile          string
+	maxDepth         int
+	concurrency      int
+	outputFile       string
+	saveFile         string
+	fpConfig         string
+	enableNuclei     bool
+	enableFuzz       bool
+	fuzzMode         string
+	proxyURL         string
+	timeout          int
+	userAgent        string
+	quiet            bool
+	verbose          bool
+	webpackRecovery  bool
+	enablePacker     bool
+	deepCrawl        bool
+	advancedScan     bool
+	batchMode        bool
+	aggregateReport  bool
 )
 
 func main() {
@@ -61,6 +67,12 @@ func main() {
 	rootCmd.Flags().BoolVarP(&enableNuclei, "nuclei", "n", false, "启用 Nuclei PoC 扫描")
 	rootCmd.Flags().BoolVar(&enableFuzz, "fuzz", false, "启用 Fuzz 路径扫描")
 	rootCmd.Flags().StringVar(&fuzzMode, "fuzz-mode", "default", "Fuzz 模式: path, api, js, all, default")
+	rootCmd.Flags().BoolVar(&webpackRecovery, "webpack-recovery", false, "启用 Webpack 模块还原")
+	rootCmd.Flags().BoolVar(&enablePacker, "enable-packer", false, "启用打包器检测")
+	rootCmd.Flags().BoolVar(&deepCrawl, "deep-crawl", false, "深度爬取 JS 文件")
+	rootCmd.Flags().BoolVar(&advancedScan, "advanced-scan", false, "高级敏感信息扫描（带上下文）")
+	rootCmd.Flags().BoolVar(&batchMode, "batch-mode", false, "批量扫描模式")
+	rootCmd.Flags().BoolVar(&aggregateReport, "aggregate-report", false, "生成聚合报告")
 
 	// 输出
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "输出文件 (json/csv) - 覆盖模式")
@@ -102,11 +114,35 @@ func runScan(cmd *cobra.Command, args []string) {
 	}
 
 	ui.PrintInfo("目标数: %d | 深度: %d | 并发: %d | 超时: %ds", len(targets), maxDepth, concurrency, timeout)
+
+	var features []string
 	if proxyURL != "" {
-		ui.PrintInfo("代理: %s", proxyURL)
+		features = append(features, fmt.Sprintf("代理: %s", proxyURL))
 	}
 	if enableFuzz {
-		ui.PrintInfo("Fuzz: %s (字典: %d 条)", fuzzMode, fuzz.GetDictSize(fuzzMode))
+		features = append(features, fmt.Sprintf("Fuzz: %s", fuzzMode))
+	}
+	if webpackRecovery {
+		features = append(features, "Webpack还原")
+	}
+	if enablePacker {
+		features = append(features, "打包器检测")
+	}
+	if deepCrawl {
+		features = append(features, "深度爬取")
+	}
+	if advancedScan {
+		features = append(features, "高级扫描")
+	}
+	if batchMode {
+		features = append(features, "批量模式")
+	}
+	if aggregateReport {
+		features = append(features, "聚合报告")
+	}
+
+	if len(features) > 0 {
+		ui.PrintInfo("功能: %s", strings.Join(features, " | "))
 	}
 	fmt.Println()
 
@@ -124,6 +160,10 @@ func runScan(cmd *cobra.Command, args []string) {
 		s.SetUserAgent(userAgent)
 	}
 	s.SetTimeout(timeout)
+	s.SetWebpackRecovery(webpackRecovery)
+	s.SetPacker(enablePacker)
+	s.SetDeepCrawl(deepCrawl)
+	s.SetAdvancedScan(advancedScan)
 
 	// 进度回调
 	var progress *ui.Progress

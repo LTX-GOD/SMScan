@@ -26,25 +26,31 @@ import (
 )
 
 type Scanner struct {
-	extractor       *extractor.Extractor
-	fpMatcher       *fingerprint.Matcher
-	hpDetector      *honeypot.Detector
-	techDetector    *extractor.TechDetector
-	secAnalyzer     *extractor.SecurityAnalyzer
-	Results         []*models.ScanResult
-	resultsMutex    sync.Mutex
-	MaxDepth        int
-	Concurrency     int
-	Timeout         int
-	UserAgent       string
-	Proxy           string
-	Collector       *colly.Collector
-	visitedPatterns sync.Map
-	scannedCount    int32
-	totalCount      int32
-	errorCount      int32
-	OnProgress      func(scanned, total int, currentURL string)
-	startTime       time.Time
+	extractor             *extractor.Extractor
+	fpMatcher             *fingerprint.Matcher
+	hpDetector            *honeypot.Detector
+	techDetector          *extractor.TechDetector
+	secAnalyzer           *extractor.SecurityAnalyzer
+	webpackRecovery       *extractor.WebpackRecovery
+	packerDetector        *extractor.PackerDetector
+	Results               []*models.ScanResult
+	resultsMutex          sync.Mutex
+	MaxDepth              int
+	Concurrency           int
+	Timeout               int
+	UserAgent             string
+	Proxy                 string
+	Collector             *colly.Collector
+	visitedPatterns       sync.Map
+	scannedCount          int32
+	totalCount            int32
+	errorCount            int32
+	OnProgress            func(scanned, total int, currentURL string)
+	startTime             time.Time
+	EnableWebpackRecovery bool
+	EnablePacker          bool
+	DeepCrawl             bool
+	AdvancedScan          bool
 }
 
 func NewScanner(fpConfigPath string, maxDepth int, concurrency int) (*Scanner, error) {
@@ -54,16 +60,22 @@ func NewScanner(fpConfigPath string, maxDepth int, concurrency int) (*Scanner, e
 	}
 
 	return &Scanner{
-		extractor:    extractor.NewExtractor(),
-		fpMatcher:    fpMatcher,
-		hpDetector:   honeypot.NewDetector(),
-		techDetector: extractor.NewTechDetector(),
-		secAnalyzer:  extractor.NewSecurityAnalyzer(),
-		MaxDepth:     maxDepth,
-		Concurrency:  concurrency,
-		Timeout:      15,
-		UserAgent:    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		Results:      make([]*models.ScanResult, 0),
+		extractor:             extractor.NewExtractor(),
+		fpMatcher:             fpMatcher,
+		hpDetector:            honeypot.NewDetector(),
+		techDetector:          extractor.NewTechDetector(),
+		secAnalyzer:           extractor.NewSecurityAnalyzer(),
+		webpackRecovery:       extractor.NewWebpackRecovery(),
+		packerDetector:        extractor.NewPackerDetector(),
+		MaxDepth:              maxDepth,
+		Concurrency:           concurrency,
+		Timeout:               15,
+		UserAgent:             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		Results:               make([]*models.ScanResult, 0),
+		EnableWebpackRecovery: false,
+		EnablePacker:          false,
+		DeepCrawl:             false,
+		AdvancedScan:          false,
 	}, nil
 }
 
@@ -80,6 +92,26 @@ func (s *Scanner) SetUserAgent(ua string) {
 // SetTimeout 设置超时
 func (s *Scanner) SetTimeout(timeout int) {
 	s.Timeout = timeout
+}
+
+// SetWebpackRecovery 设置 Webpack 模块还原
+func (s *Scanner) SetWebpackRecovery(enable bool) {
+	s.EnableWebpackRecovery = enable
+}
+
+// SetPacker 设置打包器检测
+func (s *Scanner) SetPacker(enable bool) {
+	s.EnablePacker = enable
+}
+
+// SetDeepCrawl 设置深度爬取
+func (s *Scanner) SetDeepCrawl(enable bool) {
+	s.DeepCrawl = enable
+}
+
+// SetAdvancedScan 设置高级扫描
+func (s *Scanner) SetAdvancedScan(enable bool) {
+	s.AdvancedScan = enable
 }
 
 // GetStats 获取扫描统计
@@ -359,6 +391,30 @@ func (s *Scanner) processResponse(r *colly.Response) {
 	// 5. 技术栈检测
 	techStack := s.techDetector.Detect(headers, bodyStr)
 
+	// 5.5. 打包器检测
+	var packerInfo *models.PackerInfo
+	if s.EnablePacker {
+		if strings.Contains(contentType, "text/html") {
+			info := s.packerDetector.DetectFromHTML(bodyStr)
+			if info.Detected {
+				packerInfo = &models.PackerInfo{
+					Detected: info.Detected,
+					Type:     info.Type,
+					Features: info.Features,
+				}
+			}
+		} else if strings.Contains(contentType, "javascript") {
+			info := s.packerDetector.DetectFromJS(bodyStr)
+			if info.Detected {
+				packerInfo = &models.PackerInfo{
+					Detected: info.Detected,
+					Type:     info.Type,
+					Features: info.Features,
+				}
+			}
+		}
+	}
+
 	// 6. 安全头分析
 	responseInfo := s.secAnalyzer.AnalyzeResponse(headers, nil)
 	responseInfo.ContentType = contentType
@@ -385,10 +441,19 @@ func (s *Scanner) processResponse(r *colly.Response) {
 		Vue:          vueInfo,
 		TechStack:    techStack,
 		ResponseInfo: responseInfo,
+		PackerInfo:   packerInfo,
 		RiskLevel:    riskLevel,
 		RiskScore:    riskScore,
 		ScanTime:     time.Now().Format("2006-01-02 15:04:05"),
 		ResponseTime: responseTime,
+	}
+
+	// 9. Webpack 模块还原
+	if s.EnableWebpackRecovery && strings.Contains(contentType, "javascript") {
+		chunks := s.webpackRecovery.RecoverAsyncChunks(bodyStr, targetURL)
+		if len(chunks) > 0 {
+			result.Assets.WebpackChunks = append(result.Assets.WebpackChunks, chunks...)
+		}
 	}
 
 	s.resultsMutex.Lock()
