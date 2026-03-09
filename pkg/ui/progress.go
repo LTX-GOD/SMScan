@@ -145,7 +145,7 @@ func PrintBanner() {
 
 	info := color.New(color.FgWhite)
 	info.Println("  Web Asset Scanner & Fingerprint Identifier")
-	info.Println("  https://github.com/example/smscan")
+	info.Println("  https://github.com/LTX-GOD/SMScan.git")
 	fmt.Println()
 }
 
